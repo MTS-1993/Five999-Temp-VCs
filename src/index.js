@@ -85,6 +85,13 @@ function parseCustomId(value) {
   return { action: parts[1], channelId: parts[2], ownerId: parts[3] };
 }
 
+async function respondPrivate(interaction, content) {
+  const payload = { content, components: [], flags: MessageFlags.Ephemeral };
+  if (interaction.deferred) return interaction.editReply({ content, components: [] }).catch(() => null);
+  if (interaction.replied) return interaction.followUp(payload).catch(() => null);
+  return interaction.reply(payload).catch(() => null);
+}
+
 function controlComponents(channelId, isLocked = false) {
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -343,7 +350,7 @@ async function ensureOwner(interaction, channelId, ownerIdFromControl) {
   const guild = await getGuild();
   const channel = await guild.channels.fetch(channelId).catch(() => null);
   if (!channel || channel.type !== ChannelType.GuildVoice || channel.parentId !== config.tempCategoryId) {
-    await interaction.reply({ content: 'This temporary VC no longer exists.', flags: MessageFlags.Ephemeral }).catch(() => null);
+    await respondPrivate(interaction, 'This temporary VC no longer exists.');
     return null;
   }
 
@@ -358,7 +365,7 @@ async function ensureOwner(interaction, channelId, ownerIdFromControl) {
   }
 
   if (!state || state.ownerId !== interaction.user.id) {
-    await interaction.reply({ content: 'Only the owner of this temporary VC can use these controls.', flags: MessageFlags.Ephemeral }).catch(() => null);
+    await respondPrivate(interaction, 'Only the owner of this temporary VC can use these controls.');
     return null;
   }
 
@@ -458,6 +465,13 @@ client.on('interactionCreate', async (interaction) => {
     if (!(interaction.isButton() || interaction.isUserSelectMenu() || interaction.isModalSubmit())) return;
     const parsed = parseCustomId(interaction.customId);
     if (!parsed) return;
+
+    // User-select interactions have only a short acknowledgement window.
+    // A transfer can require several Discord permission-overwrite requests, so
+    // acknowledge the selection before ownership validation/API work.
+    if (interaction.isUserSelectMenu()) {
+      await interaction.deferUpdate();
+    }
 
     const access = await ensureOwner(interaction, parsed.channelId, parsed.ownerId);
     if (!access) return;
@@ -566,35 +580,35 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isUserSelectMenu()) {
       const selectedId = interaction.values[0];
       const member = await channel.guild.members.fetch(selectedId).catch(() => null);
-      if (!member) return interaction.update({ content: 'That user could not be found in Five999.', components: [] });
-      if (member.user.bot) return interaction.update({ content: 'Bots cannot be selected for this action.', components: [] });
+      if (!member) return interaction.editReply({ content: 'That user could not be found in Five999.', components: [] });
+      if (member.user.bot) return interaction.editReply({ content: 'Bots cannot be selected for this action.', components: [] });
 
       if (parsed.action === 'permitSelect') {
         await channel.permissionOverwrites.edit(member.id, { ViewChannel: true, Connect: true }, { reason: `Permitted by ${interaction.user.tag}` });
-        return interaction.update({ content: `✅ ${member} can now join <#${channel.id}>.`, components: [] });
+        return interaction.editReply({ content: `✅ ${member} can now join <#${channel.id}>.`, components: [] });
       }
 
       if (parsed.action === 'rejectSelect') {
         if (member.id === state.ownerId) {
-          return interaction.update({ content: 'You cannot remove yourself as the VC owner. Transfer ownership first.', components: [] });
+          return interaction.editReply({ content: 'You cannot remove yourself as the VC owner. Transfer ownership first.', components: [] });
         }
         await channel.permissionOverwrites.edit(member.id, { Connect: false }, { reason: `Removed by ${interaction.user.tag}` });
         if (member.voice.channelId === channel.id) {
           await member.voice.disconnect(`Removed from temporary VC by ${interaction.user.tag}`).catch(() => null);
         }
-        return interaction.update({ content: `🚫 ${member} has been removed and denied access to <#${channel.id}>.`, components: [] });
+        return interaction.editReply({ content: `🚫 ${member} has been removed and denied access to <#${channel.id}>.`, components: [] });
       }
 
       if (parsed.action === 'transferSelect') {
         if (member.id === state.ownerId) {
-          return interaction.update({ content: 'That user is already the owner.', components: [] });
+          return interaction.editReply({ content: 'That user is already the owner.', components: [] });
         }
         if (member.voice.channelId !== channel.id) {
-          return interaction.update({ content: 'The new owner must currently be connected to this temporary VC.', components: [] });
+          return interaction.editReply({ content: 'The new owner must currently be connected to this temporary VC.', components: [] });
         }
         await transferOwnership(channel, state.ownerId, member.id, `Ownership transferred by ${interaction.user.tag}`);
         await logEvent(channel.guild, `[Temp VC] ${interaction.user.tag} (${interaction.user.id}) transferred ${channel.name} (${channel.id}) to ${member.user.tag} (${member.id}).`);
-        return interaction.update({ content: `👑 Ownership transferred to ${member}.`, components: [] });
+        return interaction.editReply({ content: `👑 Ownership transferred to ${member}.`, components: [] });
       }
     }
   } catch (error) {
