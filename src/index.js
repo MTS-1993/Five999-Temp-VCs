@@ -244,7 +244,6 @@ async function createTemporaryRoom(member) {
             PermissionFlagsBits.EmbedLinks,
             PermissionFlagsBits.ReadMessageHistory,
             PermissionFlagsBits.ManageChannels,
-            PermissionFlagsBits.ManageRoles,
             PermissionFlagsBits.MoveMembers,
             PermissionFlagsBits.MuteMembers,
             PermissionFlagsBits.DeafenMembers,
@@ -395,6 +394,7 @@ client.once('clientReady', async () => {
       console.error('[PERMISSIONS] ManageRoles is required for Lock/Unlock, Permit User, Remove User and ownership permission changes.');
     } else {
       console.log('[PERMISSIONS] Required server permissions are present.');
+      console.log('[PERMISSIONS] ManageRoles is held at server-role level and is intentionally not included in temporary VC overwrites.');
     }
 
     const category = await guild.channels.fetch(config.tempCategoryId).catch(() => null);
@@ -403,7 +403,6 @@ client.once('clientReady', async () => {
       const requiredCategoryPerms = [
         ['ViewChannel', PermissionFlagsBits.ViewChannel],
         ['ManageChannels', PermissionFlagsBits.ManageChannels],
-        ['ManageRoles', PermissionFlagsBits.ManageRoles],
         ['Connect', PermissionFlagsBits.Connect],
         ['SendMessages', PermissionFlagsBits.SendMessages],
         ['EmbedLinks', PermissionFlagsBits.EmbedLinks],
