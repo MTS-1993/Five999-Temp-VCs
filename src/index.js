@@ -568,21 +568,43 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     }
 
-    const access = await ensureOwner(interaction, parsed.channelId, parsed.ownerId);
-    if (!access) return;
+    // Use cached channel/runtime ownership for normal controls. Avoid a REST
+    // channel fetch after deferring: on busy guilds that fetch could leave the
+    // ephemeral response stuck on "thinking" even though the room is live.
+    let access;
+    if (interaction.isButton()) {
+      console.log(`[BUTTON] ${parsed.action} clicked channel=${parsed.channelId} user=${interaction.user.id}`);
+      const fast = getFastOwnerAccess(interaction, parsed.channelId, parsed.ownerId);
+      if (fast.error) {
+        console.log(`[BUTTON] ${parsed.action} denied: ${fast.error}`);
+        await interaction.editReply({ content: fast.error, components: [] });
+        return;
+      }
+      access = { guild: interaction.guild, channel: fast.channel, state: fast.state };
+      console.log(`[BUTTON] ${parsed.action} owner validated`);
+    } else {
+      access = await ensureOwner(interaction, parsed.channelId, parsed.ownerId);
+      if (!access) return;
+    }
     const { channel, state } = access;
 
     if (interaction.isButton()) {
       if (parsed.action === 'lock') {
+        console.log(`[BUTTON] lock updating permissions`);
         await channel.permissionOverwrites.edit(channel.guild.roles.everyone.id, { Connect: false }, { reason: `Locked by ${interaction.user.tag}` });
+        console.log(`[BUTTON] lock permissions updated`);
         await interaction.editReply({ content: `🔒 <#${channel.id}> is now locked.`, components: [] });
+        console.log(`[BUTTON] lock response completed`);
         await refreshPanel(channel.id);
         return;
       }
 
       if (parsed.action === 'unlock') {
+        console.log(`[BUTTON] unlock updating permissions`);
         await channel.permissionOverwrites.edit(channel.guild.roles.everyone.id, { Connect: null }, { reason: `Unlocked by ${interaction.user.tag}` });
+        console.log(`[BUTTON] unlock permissions updated`);
         await interaction.editReply({ content: `🔓 <#${channel.id}> is now unlocked.`, components: [] });
+        console.log(`[BUTTON] unlock response completed`);
         await refreshPanel(channel.id);
         return;
       }
