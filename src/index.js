@@ -478,24 +478,43 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 });
 
 client.on('interactionCreate', async (interaction) => {
+  const receivedAt = Date.now();
+  const interactionAge = Math.max(0, receivedAt - interaction.createdTimestamp);
+
   try {
     if (!(interaction.isButton() || interaction.isUserSelectMenu() || interaction.isModalSubmit())) return;
     const parsed = parseCustomId(interaction.customId);
     if (!parsed) return;
 
-    // Modal-opening buttons must be answered with showModal() as the ORIGINAL
-    // interaction response. Do not perform REST fetches before this point or
-    // Discord may expire the interaction (10062 Unknown interaction).
+    console.log(`[INTERACTION] received type=${interaction.type} action=${parsed.action} channel=${parsed.channelId} user=${interaction.user.id} age=${interactionAge}ms`);
+    if (interactionAge > 1500) {
+      console.warn(`[INTERACTION] Late gateway delivery: action=${parsed.action} age=${interactionAge}ms`);
+    }
+
+    // CRITICAL: acknowledge every interaction before any Discord REST lookup,
+    // permission edit, state recovery, or other asynchronous work.
+
+    // Modal-opening buttons must use showModal() as the original response.
+    // Validate only against data already embedded in the component ID/cache.
     if (interaction.isButton() && (parsed.action === 'rename' || parsed.action === 'limit')) {
-      const fast = getFastOwnerAccess(interaction, parsed.channelId, parsed.ownerId);
-      if (fast.error) {
-        return interaction.reply({ content: fast.error, flags: MessageFlags.Ephemeral });
+      const ownerId = parsed.ownerId !== 'unknown' ? parsed.ownerId : rooms.get(parsed.channelId)?.ownerId;
+      if (!ownerId || ownerId !== interaction.user.id) {
+        await interaction.reply({
+          content: 'Only the owner of this temporary VC can use these controls.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
       }
-      const { channel } = fast;
+
+      const cachedChannel = interaction.guild?.channels?.cache?.get(parsed.channelId);
+      if (!cachedChannel || cachedChannel.type !== ChannelType.GuildVoice) {
+        await interaction.reply({ content: 'This temporary VC no longer exists.', flags: MessageFlags.Ephemeral });
+        return;
+      }
 
       if (parsed.action === 'rename') {
         const modal = new ModalBuilder()
-          .setCustomId(customId('renameSubmit', channel.id))
+          .setCustomId(customId('renameSubmit', parsed.channelId, ownerId))
           .setTitle('Rename Temporary VC');
         const input = new TextInputBuilder()
           .setCustomId('name')
@@ -504,14 +523,15 @@ client.on('interactionCreate', async (interaction) => {
           .setRequired(true)
           .setMinLength(1)
           .setMaxLength(100)
-          .setValue(channel.name.slice(0, 100));
+          .setValue(cachedChannel.name.slice(0, 100));
         modal.addComponents(new ActionRowBuilder().addComponents(input));
         await interaction.showModal(modal);
+        console.log(`[INTERACTION] rename modal opened in ${Date.now() - receivedAt}ms`);
         return;
       }
 
       const modal = new ModalBuilder()
-        .setCustomId(customId('limitSubmit', channel.id))
+        .setCustomId(customId('limitSubmit', parsed.channelId, ownerId))
         .setTitle('Set User Limit');
       const input = new TextInputBuilder()
         .setCustomId('limit')
@@ -519,93 +539,79 @@ client.on('interactionCreate', async (interaction) => {
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
         .setMaxLength(2)
-        .setValue(String(channel.userLimit || 0));
+        .setValue(String(cachedChannel.userLimit || 0));
       modal.addComponents(new ActionRowBuilder().addComponents(input));
       await interaction.showModal(modal);
+      console.log(`[INTERACTION] limit modal opened in ${Date.now() - receivedAt}ms`);
       return;
     }
 
-    // User selects and modal submissions can involve multiple API requests.
-    // Acknowledge once up front, then only edit that response.
-    if (interaction.isUserSelectMenu()) {
-      await interaction.deferUpdate();
-    } else if (interaction.isModalSubmit()) {
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    }
-
-    // For buttons that display a select menu, use the in-memory owner state so
-    // the initial reply is immediate and cannot time out.
+    // Buttons that open a user picker: send the picker immediately. No REST.
     if (interaction.isButton() && ['permit', 'reject', 'transfer'].includes(parsed.action)) {
-      const fast = getFastOwnerAccess(interaction, parsed.channelId, parsed.ownerId);
-      if (fast.error) {
-        return interaction.reply({ content: fast.error, flags: MessageFlags.Ephemeral });
-      }
-      const { channel } = fast;
-
-      if (parsed.action === 'permit') {
-        return interaction.reply({
-          content: 'Choose a user to permit into this VC:',
-          components: [buildUserSelect('permitSelect', channel.id, 'Select a user to permit')],
+      const ownerId = parsed.ownerId !== 'unknown' ? parsed.ownerId : rooms.get(parsed.channelId)?.ownerId;
+      if (!ownerId || ownerId !== interaction.user.id) {
+        await interaction.reply({
+          content: 'Only the owner of this temporary VC can use these controls.',
           flags: MessageFlags.Ephemeral,
         });
-      }
-      if (parsed.action === 'reject') {
-        return interaction.reply({
-          content: 'Choose a user to remove/deny from this VC:',
-          components: [buildUserSelect('rejectSelect', channel.id, 'Select a user to remove')],
-          flags: MessageFlags.Ephemeral,
-        });
-      }
-      return interaction.reply({
-        content: 'Choose the new owner. They must currently be connected to your temporary VC.',
-        components: [buildUserSelect('transferSelect', channel.id, 'Select the new VC owner')],
-        flags: MessageFlags.Ephemeral,
-      });
-    }
-
-    // Slower direct-action buttons are deferred before REST work.
-    if (interaction.isButton()) {
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    }
-
-    // Use cached channel/runtime ownership for normal controls. Avoid a REST
-    // channel fetch after deferring: on busy guilds that fetch could leave the
-    // ephemeral response stuck on "thinking" even though the room is live.
-    let access;
-    if (interaction.isButton()) {
-      console.log(`[BUTTON] ${parsed.action} clicked channel=${parsed.channelId} user=${interaction.user.id}`);
-      const fast = getFastOwnerAccess(interaction, parsed.channelId, parsed.ownerId);
-      if (fast.error) {
-        console.log(`[BUTTON] ${parsed.action} denied: ${fast.error}`);
-        await interaction.editReply({ content: fast.error, components: [] });
         return;
       }
-      access = { guild: interaction.guild, channel: fast.channel, state: fast.state };
-      console.log(`[BUTTON] ${parsed.action} owner validated`);
-    } else {
-      access = await ensureOwner(interaction, parsed.channelId, parsed.ownerId);
-      if (!access) return;
+
+      if (parsed.action === 'permit') {
+        await interaction.reply({
+          content: 'Choose a user to permit into this VC:',
+          components: [buildUserSelect('permitSelect', parsed.channelId, 'Select a user to permit')],
+          flags: MessageFlags.Ephemeral,
+        });
+      } else if (parsed.action === 'reject') {
+        await interaction.reply({
+          content: 'Choose a user to remove/deny from this VC:',
+          components: [buildUserSelect('rejectSelect', parsed.channelId, 'Select a user to remove')],
+          flags: MessageFlags.Ephemeral,
+        });
+      } else {
+        await interaction.reply({
+          content: 'Choose the new owner. They must currently be connected to your temporary VC.',
+          components: [buildUserSelect('transferSelect', parsed.channelId, 'Select the new VC owner')],
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+      console.log(`[INTERACTION] ${parsed.action} picker replied in ${Date.now() - receivedAt}ms`);
+      return;
     }
+
+    // Every remaining interaction is acknowledged immediately, before validation.
+    if (interaction.isUserSelectMenu()) {
+      await interaction.deferUpdate();
+      console.log(`[INTERACTION] ${parsed.action} select deferred in ${Date.now() - receivedAt}ms`);
+    } else if (interaction.isModalSubmit()) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      console.log(`[INTERACTION] ${parsed.action} modal deferred in ${Date.now() - receivedAt}ms`);
+    } else if (interaction.isButton()) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      console.log(`[INTERACTION] ${parsed.action} button deferred in ${Date.now() - receivedAt}ms`);
+    }
+
+    const access = await ensureOwner(interaction, parsed.channelId, parsed.ownerId);
+    if (!access) return;
     const { channel, state } = access;
 
     if (interaction.isButton()) {
       if (parsed.action === 'lock') {
-        console.log(`[BUTTON] lock updating permissions`);
+        console.log(`[BUTTON] lock updating permissions channel=${channel.id}`);
         await channel.permissionOverwrites.edit(channel.guild.roles.everyone.id, { Connect: false }, { reason: `Locked by ${interaction.user.tag}` });
-        console.log(`[BUTTON] lock permissions updated`);
         await interaction.editReply({ content: `🔒 <#${channel.id}> is now locked.`, components: [] });
-        console.log(`[BUTTON] lock response completed`);
         await refreshPanel(channel.id);
+        console.log(`[BUTTON] lock completed channel=${channel.id}`);
         return;
       }
 
       if (parsed.action === 'unlock') {
-        console.log(`[BUTTON] unlock updating permissions`);
+        console.log(`[BUTTON] unlock updating permissions channel=${channel.id}`);
         await channel.permissionOverwrites.edit(channel.guild.roles.everyone.id, { Connect: null }, { reason: `Unlocked by ${interaction.user.tag}` });
-        console.log(`[BUTTON] unlock permissions updated`);
         await interaction.editReply({ content: `🔓 <#${channel.id}> is now unlocked.`, components: [] });
-        console.log(`[BUTTON] unlock response completed`);
         await refreshPanel(channel.id);
+        console.log(`[BUTTON] unlock completed channel=${channel.id}`);
         return;
       }
 
@@ -632,50 +638,69 @@ client.on('interactionCreate', async (interaction) => {
         const raw = interaction.fields.getTextInputValue('limit').trim();
         const value = Number(raw);
         if (!Number.isInteger(value) || value < 0 || value > 99) {
-          return interaction.editReply({ content: 'Enter a whole number from **0 to 99**. `0` means unlimited.', components: [] });
+          await interaction.editReply({ content: 'Enter a whole number from **0 to 99**. `0` means unlimited.', components: [] });
+          return;
         }
         await channel.setUserLimit(value, `User limit changed by ${interaction.user.tag}`);
-        return interaction.editReply({ content: `👥 User limit set to **${value === 0 ? 'Unlimited' : value}**.`, components: [] });
+        await interaction.editReply({ content: `👥 User limit set to **${value === 0 ? 'Unlimited' : value}**.`, components: [] });
+        return;
       }
     }
 
     if (interaction.isUserSelectMenu()) {
       const selectedId = interaction.values[0];
       const member = await channel.guild.members.fetch(selectedId).catch(() => null);
-      if (!member) return interaction.editReply({ content: 'That user could not be found in Five999.', components: [] });
-      if (member.user.bot) return interaction.editReply({ content: 'Bots cannot be selected for this action.', components: [] });
+      if (!member) {
+        await interaction.editReply({ content: 'That user could not be found in Five999.', components: [] });
+        return;
+      }
+      if (member.user.bot) {
+        await interaction.editReply({ content: 'Bots cannot be selected for this action.', components: [] });
+        return;
+      }
 
       if (parsed.action === 'permitSelect') {
         await channel.permissionOverwrites.edit(member.id, { ViewChannel: true, Connect: true }, { reason: `Permitted by ${interaction.user.tag}` });
-        return interaction.editReply({ content: `✅ ${member} can now join <#${channel.id}>.`, components: [] });
+        await interaction.editReply({ content: `✅ ${member} can now join <#${channel.id}>.`, components: [] });
+        return;
       }
 
       if (parsed.action === 'rejectSelect') {
         if (member.id === state.ownerId) {
-          return interaction.editReply({ content: 'You cannot remove yourself as the VC owner. Transfer ownership first.', components: [] });
+          await interaction.editReply({ content: 'You cannot remove yourself as the VC owner. Transfer ownership first.', components: [] });
+          return;
         }
         await channel.permissionOverwrites.edit(member.id, { Connect: false }, { reason: `Removed by ${interaction.user.tag}` });
         if (member.voice.channelId === channel.id) {
           await member.voice.disconnect(`Removed from temporary VC by ${interaction.user.tag}`).catch(() => null);
         }
-        return interaction.editReply({ content: `🚫 ${member} has been removed and denied access to <#${channel.id}>.`, components: [] });
+        await interaction.editReply({ content: `🚫 ${member} has been removed and denied access to <#${channel.id}>.`, components: [] });
+        return;
       }
 
       if (parsed.action === 'transferSelect') {
         if (member.id === state.ownerId) {
-          return interaction.editReply({ content: 'That user is already the owner.', components: [] });
+          await interaction.editReply({ content: 'That user is already the owner.', components: [] });
+          return;
         }
         if (member.voice.channelId !== channel.id) {
-          return interaction.editReply({ content: 'The new owner must currently be connected to this temporary VC.', components: [] });
+          await interaction.editReply({ content: 'The new owner must currently be connected to this temporary VC.', components: [] });
+          return;
         }
         await transferOwnership(channel, state.ownerId, member.id, `Ownership transferred by ${interaction.user.tag}`);
         await logEvent(channel.guild, `[Temp VC] ${interaction.user.tag} (${interaction.user.id}) transferred ${channel.name} (${channel.id}) to ${member.user.tag} (${member.id}).`);
-        return interaction.editReply({ content: `👑 Ownership transferred to ${member}.`, components: [] });
+        await interaction.editReply({ content: `👑 Ownership transferred to ${member}.`, components: [] });
+        return;
       }
     }
   } catch (error) {
-    console.error(`[INTERACTION] ${interaction.customId || 'unknown'} failed:`, error);
+    console.error(`[INTERACTION] ${interaction.customId || 'unknown'} failed age=${interactionAge}ms:`, error);
     const content = 'Something went wrong while managing that temporary VC. Please try again.';
+
+    // Never attempt a second initial acknowledgement after an acknowledgement
+    // failure such as Discord 10062/40060.
+    if (error?.code === 10062 || error?.code === 40060) return;
+
     if (interaction.deferred) {
       await interaction.editReply({ content, components: [] }).catch(() => null);
     } else if (interaction.replied) {
