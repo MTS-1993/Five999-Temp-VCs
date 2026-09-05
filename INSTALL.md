@@ -303,3 +303,8 @@ That user might have another Discord role with an explicit channel permission or
 ### Render says Node version is unsupported
 
 This project requests Node.js 24.17.0 or newer through `package.json`, matching the current discord.js 14.27.0 requirements documented by discord.js.
+
+
+## Important Discord permission
+
+The bot role must have **Manage Roles** as well as **Manage Channels**. Discord requires Manage Roles when the bot changes channel permission overwrites for Lock/Unlock, Permit User, Remove User and ownership changes. Place the bot role above normal member roles and explicitly allow Manage Roles for the bot in the temporary VC category if that category uses permission overrides.

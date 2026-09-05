@@ -61,3 +61,8 @@ This does **not** give them server-wide moderation permissions. The overwrite di
 - A GitHub repository containing these files.
 
 See `INSTALL.md` for the complete setup guide.
+
+
+## Important Discord permission
+
+The bot role must have **Manage Roles** as well as **Manage Channels**. Discord requires Manage Roles when the bot changes channel permission overwrites for Lock/Unlock, Permit User, Remove User and ownership changes. Place the bot role above normal member roles and explicitly allow Manage Roles for the bot in the temporary VC category if that category uses permission overrides.

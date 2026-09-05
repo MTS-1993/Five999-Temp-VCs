@@ -7,6 +7,7 @@ import {
   EmbedBuilder,
   GatewayIntentBits,
   ModalBuilder,
+  MessageFlags,
   PermissionFlagsBits,
   TextInputBuilder,
   TextInputStyle,
@@ -243,6 +244,7 @@ async function createTemporaryRoom(member) {
             PermissionFlagsBits.EmbedLinks,
             PermissionFlagsBits.ReadMessageHistory,
             PermissionFlagsBits.ManageChannels,
+            PermissionFlagsBits.ManageRoles,
             PermissionFlagsBits.MoveMembers,
             PermissionFlagsBits.MuteMembers,
             PermissionFlagsBits.DeafenMembers,
@@ -340,7 +342,7 @@ async function ensureOwner(interaction, channelId) {
   const guild = await getGuild();
   const channel = await guild.channels.fetch(channelId).catch(() => null);
   if (!channel || channel.type !== ChannelType.GuildVoice || channel.parentId !== config.tempCategoryId) {
-    await interaction.reply({ content: 'This temporary VC no longer exists.', ephemeral: true }).catch(() => null);
+    await interaction.reply({ content: 'This temporary VC no longer exists.', flags: MessageFlags.Ephemeral }).catch(() => null);
     return null;
   }
 
@@ -354,7 +356,7 @@ async function ensureOwner(interaction, channelId) {
   }
 
   if (!state || state.ownerId !== interaction.user.id) {
-    await interaction.reply({ content: 'Only the owner of this temporary VC can use these controls.', ephemeral: true }).catch(() => null);
+    await interaction.reply({ content: 'Only the owner of this temporary VC can use these controls.', flags: MessageFlags.Ephemeral }).catch(() => null);
     return null;
   }
 
@@ -376,6 +378,47 @@ client.once('clientReady', async () => {
   try {
     const guild = await getGuild();
     console.log(`[READY] Connected to ${guild.name} (${guild.id})`);
+
+    const me = guild.members.me || await guild.members.fetchMe();
+    const requiredGuildPerms = [
+      ['ManageChannels', PermissionFlagsBits.ManageChannels],
+      ['ManageRoles', PermissionFlagsBits.ManageRoles],
+      ['MoveMembers', PermissionFlagsBits.MoveMembers],
+      ['MuteMembers', PermissionFlagsBits.MuteMembers],
+      ['DeafenMembers', PermissionFlagsBits.DeafenMembers],
+    ];
+    const missingGuildPerms = requiredGuildPerms
+      .filter(([, bit]) => !me.permissions.has(bit))
+      .map(([name]) => name);
+    if (missingGuildPerms.length) {
+      console.error(`[PERMISSIONS] Bot role is missing server permissions: ${missingGuildPerms.join(', ')}`);
+      console.error('[PERMISSIONS] ManageRoles is required for Lock/Unlock, Permit User, Remove User and ownership permission changes.');
+    } else {
+      console.log('[PERMISSIONS] Required server permissions are present.');
+    }
+
+    const category = await guild.channels.fetch(config.tempCategoryId).catch(() => null);
+    if (category) {
+      const effective = category.permissionsFor(me);
+      const requiredCategoryPerms = [
+        ['ViewChannel', PermissionFlagsBits.ViewChannel],
+        ['ManageChannels', PermissionFlagsBits.ManageChannels],
+        ['ManageRoles', PermissionFlagsBits.ManageRoles],
+        ['Connect', PermissionFlagsBits.Connect],
+        ['SendMessages', PermissionFlagsBits.SendMessages],
+        ['EmbedLinks', PermissionFlagsBits.EmbedLinks],
+        ['ReadMessageHistory', PermissionFlagsBits.ReadMessageHistory],
+      ];
+      const missingCategoryPerms = requiredCategoryPerms
+        .filter(([, bit]) => !effective?.has(bit))
+        .map(([name]) => name);
+      if (missingCategoryPerms.length) {
+        console.error(`[PERMISSIONS] Temp VC category is missing effective bot permissions: ${missingCategoryPerms.join(', ')}`);
+      } else {
+        console.log('[PERMISSIONS] Temp VC category permissions look good.');
+      }
+    }
+
     await recoverRooms();
   } catch (error) {
     console.error('[READY] Configuration validation failed:', error);
@@ -452,14 +495,14 @@ client.on('interactionCreate', async (interaction) => {
 
       if (parsed.action === 'lock') {
         await channel.permissionOverwrites.edit(channel.guild.roles.everyone.id, { Connect: false }, { reason: `Locked by ${interaction.user.tag}` });
-        await interaction.reply({ content: `🔒 <#${channel.id}> is now locked.`, ephemeral: true });
+        await interaction.reply({ content: `🔒 <#${channel.id}> is now locked.`, flags: MessageFlags.Ephemeral });
         await refreshPanel(channel.id);
         return;
       }
 
       if (parsed.action === 'unlock') {
         await channel.permissionOverwrites.edit(channel.guild.roles.everyone.id, { Connect: null }, { reason: `Unlocked by ${interaction.user.tag}` });
-        await interaction.reply({ content: `🔓 <#${channel.id}> is now unlocked.`, ephemeral: true });
+        await interaction.reply({ content: `🔓 <#${channel.id}> is now unlocked.`, flags: MessageFlags.Ephemeral });
         await refreshPanel(channel.id);
         return;
       }
@@ -468,7 +511,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({
           content: 'Choose a user to permit into this VC:',
           components: [buildUserSelect('permitSelect', channel.id, 'Select a user to permit')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -476,7 +519,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({
           content: 'Choose a user to remove/deny from this VC:',
           components: [buildUserSelect('rejectSelect', channel.id, 'Select a user to remove')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -484,12 +527,12 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({
           content: 'Choose the new owner. They must currently be connected to your temporary VC.',
           components: [buildUserSelect('transferSelect', channel.id, 'Select the new VC owner')],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
       if (parsed.action === 'delete') {
-        await interaction.reply({ content: `🗑️ Deleting <#${channel.id}>.`, ephemeral: true });
+        await interaction.reply({ content: `🗑️ Deleting <#${channel.id}>.`, flags: MessageFlags.Ephemeral });
         await deletePanel(channel.id);
         rooms.delete(channel.id);
         await logEvent(channel.guild, `[Temp VC] ${interaction.user.tag} (${interaction.user.id}) deleted ${channel.name} (${channel.id}).`);
@@ -502,7 +545,7 @@ client.on('interactionCreate', async (interaction) => {
       if (parsed.action === 'renameSubmit') {
         const name = cleanChannelName(interaction.fields.getTextInputValue('name'));
         await channel.setName(name, `Renamed by temporary VC owner ${interaction.user.tag}`);
-        await interaction.reply({ content: `✏️ VC renamed to **${name}**.`, ephemeral: true });
+        await interaction.reply({ content: `✏️ VC renamed to **${name}**.`, flags: MessageFlags.Ephemeral });
         await refreshPanel(channel.id);
         return;
       }
@@ -511,10 +554,10 @@ client.on('interactionCreate', async (interaction) => {
         const raw = interaction.fields.getTextInputValue('limit').trim();
         const value = Number(raw);
         if (!Number.isInteger(value) || value < 0 || value > 99) {
-          return interaction.reply({ content: 'Enter a whole number from **0 to 99**. `0` means unlimited.', ephemeral: true });
+          return interaction.reply({ content: 'Enter a whole number from **0 to 99**. `0` means unlimited.', flags: MessageFlags.Ephemeral });
         }
         await channel.setUserLimit(value, `User limit changed by ${interaction.user.tag}`);
-        return interaction.reply({ content: `👥 User limit set to **${value === 0 ? 'Unlimited' : value}**.`, ephemeral: true });
+        return interaction.reply({ content: `👥 User limit set to **${value === 0 ? 'Unlimited' : value}**.`, flags: MessageFlags.Ephemeral });
       }
     }
 
@@ -554,7 +597,7 @@ client.on('interactionCreate', async (interaction) => {
     }
   } catch (error) {
     console.error(`[INTERACTION] ${interaction.customId || 'unknown'} failed:`, error);
-    const payload = { content: 'Something went wrong while managing that temporary VC. Please try again.', ephemeral: true };
+    const payload = { content: 'Something went wrong while managing that temporary VC. Please try again.', flags: MessageFlags.Ephemeral };
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp(payload).catch(() => null);
     } else {
