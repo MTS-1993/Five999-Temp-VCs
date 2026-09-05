@@ -74,14 +74,15 @@ function roomNameFor(member) {
   return cleanChannelName(`${config.prefix} ${display}'s VC`);
 }
 
-function customId(action, channelId) {
-  return `tempvc:${action}:${channelId}`;
+function customId(action, channelId, ownerId = null) {
+  const resolvedOwnerId = ownerId || rooms.get(channelId)?.ownerId || 'unknown';
+  return `tempvc:${action}:${channelId}:${resolvedOwnerId}`;
 }
 
 function parseCustomId(value) {
   const parts = value.split(':');
-  if (parts.length !== 3 || parts[0] !== 'tempvc') return null;
-  return { action: parts[1], channelId: parts[2] };
+  if (parts.length !== 4 || parts[0] !== 'tempvc') return null;
+  return { action: parts[1], channelId: parts[2], ownerId: parts[3] };
 }
 
 function controlComponents(channelId, isLocked = false) {
@@ -161,6 +162,7 @@ async function logEvent(guild, text) {
 function findOwnerFromOverwrites(channel) {
   for (const overwrite of channel.permissionOverwrites.cache.values()) {
     if (overwrite.type !== 1) continue; // member overwrite
+    if (overwrite.id === client.user?.id) continue; // never mistake the bot's own overwrite for the VC owner
     if (overwrite.allow.has(PermissionFlagsBits.ManageChannels)) return overwrite.id;
   }
   return null;
@@ -337,7 +339,7 @@ async function recoverRooms() {
   console.log(`[RECOVERY] Tracking ${rooms.size} temporary voice channel(s).`);
 }
 
-async function ensureOwner(interaction, channelId) {
+async function ensureOwner(interaction, channelId, ownerIdFromControl) {
   const guild = await getGuild();
   const channel = await guild.channels.fetch(channelId).catch(() => null);
   if (!channel || channel.type !== ChannelType.GuildVoice || channel.parentId !== config.tempCategoryId) {
@@ -346,12 +348,13 @@ async function ensureOwner(interaction, channelId) {
   }
 
   let state = rooms.get(channelId);
-  if (!state) {
-    const ownerId = findOwnerFromOverwrites(channel);
-    if (ownerId) {
-      state = { ownerId, panelMessageId: interaction.message?.id || null };
-      rooms.set(channelId, state);
-    }
+  const recoveredOwnerId = findOwnerFromOverwrites(channel);
+  const controlOwnerId = ownerIdFromControl && ownerIdFromControl !== 'unknown' ? ownerIdFromControl : null;
+  const authoritativeOwnerId = recoveredOwnerId || state?.ownerId || controlOwnerId;
+
+  if (authoritativeOwnerId) {
+    state = { ownerId: authoritativeOwnerId, panelMessageId: state?.panelMessageId || interaction.message?.id || null };
+    rooms.set(channelId, state);
   }
 
   if (!state || state.ownerId !== interaction.user.id) {
@@ -456,7 +459,7 @@ client.on('interactionCreate', async (interaction) => {
     const parsed = parseCustomId(interaction.customId);
     if (!parsed) return;
 
-    const access = await ensureOwner(interaction, parsed.channelId);
+    const access = await ensureOwner(interaction, parsed.channelId, parsed.ownerId);
     if (!access) return;
     const { channel, state } = access;
 
