@@ -18,7 +18,6 @@ const requiredEnv = [
   'GUILD_ID',
   'CREATE_VC_ID',
   'TEMP_CATEGORY_ID',
-  'CONTROL_PANEL_CHANNEL_ID',
 ];
 
 for (const key of requiredEnv) {
@@ -33,7 +32,6 @@ const config = {
   guildId: process.env.GUILD_ID,
   createVcId: process.env.CREATE_VC_ID,
   tempCategoryId: process.env.TEMP_CATEGORY_ID,
-  controlPanelChannelId: process.env.CONTROL_PANEL_CHANNEL_ID,
   logChannelId: process.env.LOG_CHANNEL_ID || null,
   defaultUserLimit: Math.max(0, Math.min(99, Number.parseInt(process.env.DEFAULT_USER_LIMIT || '0', 10) || 0)),
   prefix: (process.env.TEMP_VC_PREFIX || '🔊').trim(),
@@ -43,7 +41,6 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMembers,
   ],
 });
 
@@ -153,14 +150,6 @@ async function getGuild() {
   return client.guilds.fetch(config.guildId);
 }
 
-async function getControlChannel(guild) {
-  const channel = await guild.channels.fetch(config.controlPanelChannelId).catch(() => null);
-  if (!channel || channel.type !== ChannelType.GuildText) {
-    throw new Error('CONTROL_PANEL_CHANNEL_ID must point to a normal text channel.');
-  }
-  return channel;
-}
-
 async function logEvent(guild, text) {
   if (!config.logChannelId) return;
   const channel = await guild.channels.fetch(config.logChannelId).catch(() => null);
@@ -187,8 +176,7 @@ async function refreshPanel(channelId) {
   const guild = await getGuild();
   const channel = await guild.channels.fetch(channelId).catch(() => null);
   if (!channel) return;
-  const panelChannel = await getControlChannel(guild);
-  const message = await panelChannel.messages.fetch(state.panelMessageId).catch(() => null);
+  const message = await channel.messages.fetch(state.panelMessageId).catch(() => null);
   if (!message) return;
   await message.edit({
     embeds: [panelEmbed(channel, state.ownerId)],
@@ -197,8 +185,7 @@ async function refreshPanel(channelId) {
 }
 
 async function createPanel(channel, ownerId) {
-  const panelChannel = await getControlChannel(channel.guild);
-  const message = await panelChannel.send({
+  const message = await channel.send({
     embeds: [panelEmbed(channel, ownerId)],
     components: controlComponents(channel.id, isLocked(channel)),
     allowedMentions: { parse: [] },
@@ -212,9 +199,9 @@ async function deletePanel(channelId) {
   if (!state?.panelMessageId) return;
   const guild = await getGuild().catch(() => null);
   if (!guild) return;
-  const panelChannel = await getControlChannel(guild).catch(() => null);
-  if (!panelChannel) return;
-  const message = await panelChannel.messages.fetch(state.panelMessageId).catch(() => null);
+  const channel = await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel || channel.type !== ChannelType.GuildVoice) return;
+  const message = await channel.messages.fetch(state.panelMessageId).catch(() => null);
   if (message) await message.delete().catch(() => null);
 }
 
@@ -298,9 +285,7 @@ async function cleanUpRoom(channel) {
 
 async function recoverRooms() {
   const guild = await getGuild();
-  const panelChannel = await getControlChannel(guild);
   const channels = await guild.channels.fetch();
-  const messages = await panelChannel.messages.fetch({ limit: 100 }).catch(() => null);
 
   for (const [, channel] of channels) {
     if (!channel || channel.type !== ChannelType.GuildVoice || channel.parentId !== config.tempCategoryId) continue;
@@ -310,6 +295,7 @@ async function recoverRooms() {
     if (!ownerId) continue;
 
     let panelMessageId = null;
+    const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
     if (messages) {
       const panel = messages.find((msg) =>
         msg.author.id === client.user.id &&
@@ -369,7 +355,7 @@ function buildUserSelect(action, channelId, placeholder) {
   );
 }
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`[READY] Logged in as ${client.user.tag}`);
   try {
     const guild = await getGuild();
