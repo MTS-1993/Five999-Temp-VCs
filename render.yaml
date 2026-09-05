@@ -1,0 +1,24 @@
+services:
+  - type: worker
+    name: five999-tempvc
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: GUILD_ID
+        sync: false
+      - key: CREATE_VC_ID
+        sync: false
+      - key: TEMP_CATEGORY_ID
+        sync: false
+      - key: CONTROL_PANEL_CHANNEL_ID
+        sync: false
+      - key: LOG_CHANNEL_ID
+        sync: false
+      - key: DEFAULT_USER_LIMIT
+        value: "0"
+      - key: TEMP_VC_PREFIX
+        value: "🔊"
