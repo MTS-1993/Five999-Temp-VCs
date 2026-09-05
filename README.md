@@ -9,7 +9,7 @@ No slash commands are used.
 - Join a permanent `➕ Create Temporary VC` voice channel to create a room.
 - Automatically moves the creator into their new room.
 - Gives the creator permissions only on their own temporary VC.
-- Button control panel posted directly in each temporary VC's built-in chat.
+- Button control panel in a configured Discord text channel.
 - Rename via modal.
 - Lock / unlock.
 - Set a user limit from 0-99.
@@ -36,7 +36,7 @@ Each room gets a panel containing:
 - `👑 Transfer Owner`
 - `🗑️ Delete`
 
-Anyone who can access that temporary VC's built-in chat can see its panel, but **only the current owner of the corresponding VC can use them**. Responses to button actions are ephemeral/private to the person using the panel.
+Anyone who can see the configured control panel channel can see the panels, but **only the current owner of the corresponding VC can use them**. Responses to button actions are ephemeral/private to the person using the panel.
 
 ## Discord permissions given to the VC creator
 

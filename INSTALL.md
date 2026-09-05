@@ -10,7 +10,10 @@ In the Five999 Discord server, create or choose:
 2. A permanent voice channel users join to create a room, for example:
    `➕ Create Temporary VC`
 
-3. Optional: a text channel for bot logs, for example:
+3. A text channel for the room control panels, for example:
+   `#vc-control-panels`
+
+4. Optional: a text channel for bot logs, for example:
    `#temp-vc-logs`
 
 The `➕ Create Temporary VC` channel can sit inside the same category as the temporary rooms or elsewhere. The temporary rooms themselves are created inside the category configured by `TEMP_CATEGORY_ID`.
@@ -27,9 +30,10 @@ In Discord:
 4. Right-click the Five999 server and choose **Copy Server ID**.
 5. Right-click `➕ Create Temporary VC` and choose **Copy Channel ID**.
 6. Right-click the temporary VC category and choose **Copy Category ID**.
-7. If using logging, copy the log channel ID as well.
+7. Right-click the control-panel text channel and choose **Copy Channel ID**.
+8. If using logging, copy the log channel ID as well.
 
-You will enter these on Render later. No separate control-panel channel ID is required; the panel is sent into each temporary voice channel's own chat.
+You will enter these on Render later.
 
 ---
 
@@ -42,9 +46,13 @@ You will enter these on Render later. No separate control-panel channel ID is re
 5. Create/reset the bot token and copy it somewhere secure.
 6. Never place the token in GitHub or inside the bot files.
 
-### Gateway Intents
+### Required Gateway Intent
 
-No privileged Gateway Intents are required for this version. You can leave **Server Members Intent**, **Presence Intent**, and **Message Content Intent** disabled.
+On the bot page, enable:
+
+- **Server Members Intent**
+
+The bot uses guild member information for ownership, user selectors and automatic ownership transfers.
 
 ---
 
@@ -276,6 +284,7 @@ Check:
 - `GUILD_ID` is the correct server ID.
 - The bot has **Manage Channels** and **Move Members**.
 - The bot's role is positioned correctly.
+- **Server Members Intent** is enabled in the Developer Portal.
 
 ### The VC creates but I am not moved into it
 

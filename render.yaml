@@ -14,6 +14,7 @@ services:
         sync: false
       - key: TEMP_CATEGORY_ID
         sync: false
+        sync: false
       - key: LOG_CHANNEL_ID
         sync: false
       - key: DEFAULT_USER_LIMIT

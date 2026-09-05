@@ -175,16 +175,17 @@ async function refreshPanel(channelId) {
   if (!state?.panelMessageId) return;
   const guild = await getGuild();
   const channel = await guild.channels.fetch(channelId).catch(() => null);
-  if (!channel) return;
+  if (!channel || !channel.isTextBased()) return;
   const message = await channel.messages.fetch(state.panelMessageId).catch(() => null);
   if (!message) return;
   await message.edit({
     embeds: [panelEmbed(channel, state.ownerId)],
     components: controlComponents(channel.id, isLocked(channel)),
-  }).catch(() => null);
+  });
 }
 
 async function createPanel(channel, ownerId) {
+  if (!channel.isTextBased()) throw new Error(`Temporary VC ${channel.id} does not support channel chat.`);
   const message = await channel.send({
     embeds: [panelEmbed(channel, ownerId)],
     components: controlComponents(channel.id, isLocked(channel)),
@@ -200,7 +201,7 @@ async function deletePanel(channelId) {
   const guild = await getGuild().catch(() => null);
   if (!guild) return;
   const channel = await guild.channels.fetch(channelId).catch(() => null);
-  if (!channel || channel.type !== ChannelType.GuildVoice) return;
+  if (!channel || !channel.isTextBased()) return;
   const message = await channel.messages.fetch(state.panelMessageId).catch(() => null);
   if (message) await message.delete().catch(() => null);
 }
@@ -231,6 +232,21 @@ async function createTemporaryRoom(member) {
         {
           id: guild.roles.everyone.id,
           allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak],
+        },
+        {
+          id: guild.members.me.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.Connect,
+            PermissionFlagsBits.Speak,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.EmbedLinks,
+            PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.ManageChannels,
+            PermissionFlagsBits.MoveMembers,
+            PermissionFlagsBits.MuteMembers,
+            PermissionFlagsBits.DeafenMembers,
+          ],
         },
         {
           id: member.id,
@@ -295,9 +311,9 @@ async function recoverRooms() {
     if (!ownerId) continue;
 
     let panelMessageId = null;
-    const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
-    if (messages) {
-      const panel = messages.find((msg) =>
+    if (channel.isTextBased()) {
+      const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+      const panel = messages?.find((msg) =>
         msg.author.id === client.user.id &&
         msg.embeds?.[0]?.footer?.text?.endsWith(channel.id)
       );
@@ -537,7 +553,7 @@ client.on('interactionCreate', async (interaction) => {
       }
     }
   } catch (error) {
-    console.error('[INTERACTION] Error:', error);
+    console.error(`[INTERACTION] ${interaction.customId || 'unknown'} failed:`, error);
     const payload = { content: 'Something went wrong while managing that temporary VC. Please try again.', ephemeral: true };
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp(payload).catch(() => null);
